@@ -1,29 +1,40 @@
 import ipaddress
-from operator import itemgetter
 
-from climeleon.base import BaseCommand
+import click
+from tabulate import tabulate
+
+from .base import BaseCommand
+
+
+@click.group()
+def network():
+    pass
+
 
 class NetworkDeleteCommand(BaseCommand):
-    description = "Tear down a network, including routers and subnets."
+    @staticmethod
+    @network.command(name='delete')
+    @click.option('--segment', 'segment', help='network segment (VLAN) ID')
+    @click.option('--network', 'network', help='network ID')
+    def cli(segment, network):
+        """Tear down a network, including routers and ports.
+        """
+        return NetworkDeleteCommand().run(segment=segment, network=network)
 
-    def register_args(self, parser):
-        parser.add_argument("--segment")
-        parser.add_argument("--network")
-
-    def run(self):
+    def run(self, segment=None, network=None):
         neutron = self.neutron()
 
-        if self.args.segment is not None:
-            network = self._find_network(neutron, {
-                "provider:segmentation_id": self.args.segment
+        if segment is not None:
+            neutron_network = self._find_network(neutron, {
+                "provider:segmentation_id": segment
             })
-        elif self.args.network is not None:
-            network = neutron.get_network(self.args.network)
+        elif network is not None:
+            neutron_network = neutron.get_network(network)
         else:
             raise ValueError("Missing either segment ID or network ID")
 
         # Find ports
-        ports = self._list_for_network(neutron, network, "ports")
+        ports = self._list_for_network(neutron, neutron_network, "ports")
 
         # Abort if there are nova ports, this means there are running instances
         if any(p.get("device_owner") == "compute:nova" for p in ports):
@@ -41,14 +52,14 @@ class NetworkDeleteCommand(BaseCommand):
                 "port_id": p["id"]
             })
 
-        subnets = self._list_for_network(neutron, network, "subnets")
+        subnets = self._list_for_network(neutron, neutron_network, "subnets")
 
         for s in subnets:
             self.log.info("Deleting subnet {}".format(s["id"]))
             neutron.delete_subnet(s["id"])
 
-        self.log.info("Deleting network {}".format(network["id"]))
-        neutron.delete_network(network["id"])
+        self.log.info("Deleting network {}".format(neutron_network["id"]))
+        neutron.delete_network(neutron_network["id"])
 
         for p in router_ports:
             router_id = p["device_id"]
@@ -61,8 +72,6 @@ class NetworkDeleteCommand(BaseCommand):
                 neutron.remove_gateway_router(router_id)
                 self.log.info("Removing router {}".format(router_id))
                 neutron.delete_router(router_id)
-
-
 
     def _find_network(self, neutron, params):
         networks = neutron.list_networks(**params).get("networks")
@@ -79,10 +88,14 @@ class NetworkDeleteCommand(BaseCommand):
 
 
 class NetworkSegmentStatusCommand(BaseCommand):
-    description = """
-    Display the current Neutron networks assigned for each VLAN. The name of
-    network and its owning project are also displayed.
-    """
+    @staticmethod
+    @network.command(name='segments')
+    def cli():
+        """Display the current Neutron networks assigned for each VLAN.
+
+        The name of the network and its owning project are also displayed.
+        """
+        return NetworkSegmentStatusCommand().run()
 
     def run(self):
         neutron = self.neutron()
@@ -115,10 +128,16 @@ class NetworkSegmentStatusCommand(BaseCommand):
 
 
 class NetworkPublicIPStatusCommand(BaseCommand):
-    description = """
-    Display all public IP addresses in the 'public' network DHCP range, and
-    their current allocation status (as Floating IP or router gateway), if any.
-    """
+    @staticmethod
+    @network.command(name='ips')
+    def cli():
+        """Check the status of public IP addresses.
+
+        Displays all public IP addresses in the 'public' network DHCP range
+        and their current allocation status (as Floating IP or router gateway),
+        if any.
+        """
+        return NetworkPublicIPStatusCommand().run()
 
     def _public_allocation_pools(self, neutron):
         networks = neutron.list_networks(name="public").get("networks")
@@ -170,12 +189,12 @@ class NetworkPublicIPStatusCommand(BaseCommand):
                 all_addresses.extend(list(ipaddress.IPv4Network(net)))
 
         rows = []
-        rows.append([
+        headers = [
             "public_ip",
             "allocation_type",
             "reservable",
             "project_id",
-        ])
+        ]
 
         for public_ip in sorted(all_addresses):
             port = ports_by_ip.get(str(public_ip))
@@ -204,7 +223,4 @@ class NetworkPublicIPStatusCommand(BaseCommand):
                 project_id,
             ])
 
-        widths = [max(map(len, col)) for col in zip(*rows)]
-        for row in rows:
-            cols = (val.ljust(width) for val, width in zip(row, widths))
-            print("  ".join(cols))
+        click.echo(tabulate(rows, headers=headers))

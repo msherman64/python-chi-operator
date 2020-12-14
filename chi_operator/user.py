@@ -1,19 +1,31 @@
 from operator import attrgetter
 
+import click
 from keystoneauth1.exceptions import NotFound
 
-from climeleon.base import BaseCommand
-from climeleon.util import column_align
+from .base import BaseCommand
+from .util import column_align
+
+
+@click.group()
+def user():
+    pass
 
 
 class UserInspectCommand(BaseCommand):
+    @staticmethod
+    @user.command(name='inspect')
+    @click.argument('user')
+    def cli(user):
+        """Display a summary for a given user.
 
-    def register_args(self, parser):
-        parser.add_argument("user", metavar="USER",
-            help=("The user name or ID"))
+        When specifying the USER, you can user either the username or the
+        Keystone user ID.
 
-    def run(self):
-        user = self.args.user
+        """
+        return UserInspectCommand().run(user=user)
+
+    def run(self, user=None):
         keystone = self.keystone()
 
         query = {}

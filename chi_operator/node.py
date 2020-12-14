@@ -1,24 +1,32 @@
 from argparse import FileType
 import configparser
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
+import re
+
+import click
 from dracclient.client import DRACClient
 from ironicclient.exc import HTTPNotFound
-import re
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 import warnings
 
-from climeleon.base import BaseCommand
+from .base import BaseCommand
 
 IRONIC_CLIENT_VERSION = 1
 
 
+@click.group()
+def node():
+    pass
+
+
 class NodeAssignSwitchIDsCommand(BaseCommand):
-    """
-    Intended as a migration script for
-    https://collab.tacc.utexas.edu/issues/17386, but could be useful later.
-    Exists mostly as documentation and perhaps example code that can be re-used.
-    """
+    @staticmethod
+    @node.command(name='assign-switch-id')
+    def cli():
+        """Assign switch_id attributes for Ironic ports."""
+        return NodeAssignSwitchIDsCommand().run()
+
     @staticmethod
     def uc_assignment_strategy(cls, node, port):
         # Names are like c01, nc24.
@@ -61,7 +69,7 @@ class NodeAssignSwitchIDsCommand(BaseCommand):
     }
 
     def run(self):
-        region_name = self.args.os_region_name
+        region_name = self.session.region_name
         ironic = self.ironic()
 
         ports_for_update = []
@@ -226,60 +234,62 @@ class NodeRotateIPMIPasswordCommand(BaseCommand):
 
 
 class NodeEnrollCommand(BaseCommand):
-    """
-    Enroll nodes in Ironic/Blazar from a configuration file. The configuration
-    file declares nodes by name and includes important configuration, namely the
-    IPMI authentication details and the physical switch information and NIC MAC
-    addresses for the bare metal node.
-
-    Reads a node configuration from the first positional argument, and defaults
-    to looking for a file "nodes.conf".
-
-    Sample configuration format::
-
-      [node01]
-      # Give a name to the node class; Chameleon uses node class prefixes
-      # followed by specifiers, e.g. compute_haswell or gpu_rtx
-      node_type = compute_haswell
-      ipmi_username = root
-      ipmi_password = hopefully_not_default
-      ipmi_address = 10.10.10.1
-      # Optional, defaults to this value.
-      ipmi_port = 623
-      # Arbitrary terminal port; this is used to plumb a socat process to allow
-      # reading and writing to a virtual console. It is just important that it does
-      # not conflict with another node or host process.
-      ipmi_terminal_port = 30133
-      # Each NIC that should be manageable has its own section. The name of
-      # the section does not matter so long as the first part is the name of a
-      # node defined elsewhere in the config. This example uses the consistent
-      # network device name of the interface.
-      [node01.ports.eno1]
-      switch_name = LeafSwitch01
-      switch_port_id = Te 1/10/1
-      mac_address = 00:00:de:ad:be:ef
-      [node01.ports.eno2]
-      switch_name = LeafSwitch01-01
-      switch_port_id = Te 1/4/1
-      mac_address = 00:00:de:ad:be:f0
-
-    """
-
     DEFAULT_PROPERTIES = {
         'capabilities': 'boot_option:local',
     }
 
     ALLOWED_SUBSECTIONS = ['ports']
 
-    def register_args(self, parser):
-        parser.add_argument("nodes", metavar="NODE", nargs="*")
-        parser.add_argument("--node-conf", type=FileType("r"),
-                            required=True)
+    @staticmethod
+    @node.command(name='enroll')
+    @click.option('--node-conf', 'node_conf', type=click.File('r'))
+    @click.argument('nodes', nargs=-1)
+    def cli(node_conf, nodes):
+        """
+        Enroll nodes in Ironic/Blazar from a configuration file. The configuration
+        file declares nodes by name and includes important configuration, namely the
+        IPMI authentication details and the physical switch information and NIC MAC
+        addresses for the bare metal node.
 
-    def run(self):
+        Reads a node configuration from the first positional argument, and defaults
+        to looking for a file "nodes.conf".
+
+        Sample configuration format::
+
+            \b
+            [node01]
+            # Give a name to the node class; Chameleon uses node class prefixes
+            # followed by specifiers, e.g. compute_haswell or gpu_rtx
+            node_type = compute_haswell
+            ipmi_username = root
+            ipmi_password = hopefully_not_default
+            ipmi_address = 10.10.10.1
+            # Optional, defaults to this value.
+            ipmi_port = 623
+            # Arbitrary terminal port; this is used to plumb a socat process to allow
+            # reading and writing to a virtual console. It is just important that it does
+            # not conflict with another node or host process.
+            ipmi_terminal_port = 30133
+            # Each NIC that should be manageable has its own section. The name of
+            # the section does not matter so long as the first part is the name of a
+            # node defined elsewhere in the config. This example uses the consistent
+            # network device name of the interface.
+            [node01.ports.eno1]
+            switch_name = LeafSwitch01
+            switch_port_id = Te 1/10/1
+            mac_address = 00:00:de:ad:be:ef
+            [node01.ports.eno2]
+            switch_name = LeafSwitch01-01
+            switch_port_id = Te 1/4/1
+            mac_address = 00:00:de:ad:be:f0
+
+        """
+        return NodeEnrollCommand().run(node_conf=node_conf, nodes=nodes)
+
+    def run(self, node_conf=None, nodes=None):
         config = configparser.ConfigParser()
-        with self.args.node_conf as f:
-            config.read_file(f)
+        if node_conf:
+            config.read_file(node_conf)
 
         node_configs = defaultdict(lambda: dict(
             driver='ipmi',
@@ -297,20 +307,20 @@ class NodeEnrollCommand(BaseCommand):
                     bucket = 'driver_info' if key.startswith('ipmi') else 'properties'
                     node_configs[section][bucket][key] = value
             else:
-                node, subsection, id = section.split('.')
+                node, subsection, sub_id = section.split('.')
                 if subsection not in self.ALLOWED_SUBSECTIONS:
                     raise ValueError(
                         f'Unknown subsection {subsection} for {node}! '
                         f'Allowed values: {",".join(self.ALLOWED_SUBSECTIONS)}')
                 sub = dict(config[section].items())
-                sub['id'] = id
+                sub['id'] = sub_id
                 node_configs[node][subsection].append(sub)
 
         # Allow user to filter list
-        if self.args.nodes:
+        if nodes:
             node_configs = {
                 node: conf for node, conf in node_configs
-                if node in self.args.nodes
+                if node in nodes
             }
 
         # Pre-fetch the list of existing Blazar hosts; there is no great way
