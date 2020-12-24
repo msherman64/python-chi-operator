@@ -171,8 +171,8 @@ class NetworkPublicIPStatusCommand(BaseCommand):
             for fip in blazar.floatingip.list()
         ]
 
+        log('Retrieving all active Neutron ports')
         with spinner():
-            log('Retrieving all active Neutron ports')
             ports = neutron.list_ports().get("ports")
 
         public_ports = [
@@ -187,8 +187,8 @@ class NetworkPublicIPStatusCommand(BaseCommand):
             for p in public_ports
         }
 
+        log('Retrieving all public allocation pools')
         with spinner():
-            log('Retrieving all public allocation pools')
             allocation_pools = self._public_allocation_pools(neutron)
 
         all_addresses = list(reservable_ips)
