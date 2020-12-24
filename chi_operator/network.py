@@ -1,9 +1,14 @@
 import ipaddress
 
 import click
+from click_spinner import spinner
 from tabulate import tabulate
 
 from .base import BaseCommand
+
+
+def log(msg):
+    click.echo(msg, err=True)
 
 
 @click.group()
@@ -166,7 +171,9 @@ class NetworkPublicIPStatusCommand(BaseCommand):
             for fip in blazar.floatingip.list()
         ]
 
-        ports = neutron.list_ports().get("ports")
+        with spinner():
+            log('Retrieving all active Neutron ports')
+            ports = neutron.list_ports().get("ports")
 
         public_ports = [
             p for p in ports
@@ -180,7 +187,10 @@ class NetworkPublicIPStatusCommand(BaseCommand):
             for p in public_ports
         }
 
-        allocation_pools = self._public_allocation_pools(neutron)
+        with spinner():
+            log('Retrieving all public allocation pools')
+            allocation_pools = self._public_allocation_pools(neutron)
+
         all_addresses = list(reservable_ips)
         for p in allocation_pools:
             start_ip = ipaddress.IPv4Address(p.get("start"))
@@ -196,31 +206,33 @@ class NetworkPublicIPStatusCommand(BaseCommand):
             "project_id",
         ]
 
-        for public_ip in sorted(all_addresses):
-            port = ports_by_ip.get(str(public_ip))
-            reservable = str(public_ip in reservable_ips)
+        with click.progressbar(sorted(all_addresses),
+                               label='Processing addresses') as ips:
+            for public_ip in ips:
+                port = ports_by_ip.get(str(public_ip))
+                reservable = str(public_ip in reservable_ips)
 
-            allocation_type = "unallocated"
-            project_id = "none"
+                allocation_type = "unallocated"
+                project_id = "none"
 
-            if port:
-                device_owner = port.get("device_owner")
-                if device_owner == "network:router_gateway":
-                    allocation_type = "gateway"
-                    router_id = port.get("device_id")
-                    if router_id not in routers:
-                        routers[router_id] = (
-                            neutron.show_router(router_id).get("router"))
-                    project_id = routers[router_id].get("project_id")
-                else:
-                    allocation_type = "floating_ip"
-                    project_id = port.get("project_id")
+                if port:
+                    device_owner = port.get("device_owner")
+                    if device_owner == "network:router_gateway":
+                        allocation_type = "gateway"
+                        router_id = port.get("device_id")
+                        if router_id not in routers:
+                            routers[router_id] = (
+                                neutron.show_router(router_id).get("router"))
+                        project_id = routers[router_id].get("project_id")
+                    else:
+                        allocation_type = "floating_ip"
+                        project_id = port.get("project_id")
 
-            rows.append([
-                str(public_ip),
-                allocation_type,
-                reservable,
-                project_id,
-            ])
+                rows.append([
+                    str(public_ip),
+                    allocation_type,
+                    reservable,
+                    project_id,
+                ])
 
         click.echo(tabulate(rows, headers=headers))
