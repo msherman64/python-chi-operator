@@ -462,4 +462,6 @@ class NodeEnrollCommand(BaseCommand):
             ironic.node.set_provision_state(node.uuid, 'provide')
             ironic.node.wait_for_provision_state(node.uuid, 'available')
 
+        ironic.node.set_console_mode(node.uuid, True)
+
         self._ensure_blazar_host(blazar, node, blazar_hosts)
