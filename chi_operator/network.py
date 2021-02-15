@@ -1,10 +1,13 @@
 import ipaddress
 
+from chi.network import nuke_network
 import click
 from click_spinner import spinner
+from dateutil.parser import parse
 from tabulate import tabulate
 
 from .base import BaseCommand
+from .util import now
 
 
 def log(msg):
@@ -92,9 +95,14 @@ class NetworkDeleteCommand(BaseCommand):
         return getter(network_id=network_id).get(name)
 
 
+@network.group()
+def segment():
+    pass
+
+
 class NetworkSegmentStatusCommand(BaseCommand):
     @staticmethod
-    @network.command(name='segments')
+    @segment.command(name='list')
     def cli():
         """Display the current Neutron networks assigned for each VLAN.
 
@@ -130,6 +138,62 @@ class NetworkSegmentStatusCommand(BaseCommand):
         for row in rows:
             cols = (val.ljust(width) for val, width in zip(row, widths))
             print("  ".join(cols))
+
+
+class NetworkSegmentGarbageCollectCommand(BaseCommand):
+    @staticmethod
+    @segment.command(name='gc')
+    def cli():
+        """Clean up networks created for terminated network leases.
+
+        Find all networks that are associated with a reservable VLAN in Blazar
+        and clean up their subnets and routers if there should no longer be
+        a reservation for them.
+        """
+        return NetworkSegmentGarbageCollectCommand().run()
+
+    def _still_active(self, reservation):
+        _now = now()
+        return (parse(reservation["start_date"]) < _now and
+                parse(reservation["end_date"]) > _now)
+
+    def run(self):
+        neutron = self.neutron()
+        blazar = self.blazar()
+        networks = neutron.list_networks().get("networks")
+        reservable_networks = blazar.network.list()
+        currently_reserved = [
+            alloc["resource_id"]
+            for alloc in blazar.network.list_allocations()
+            if any(self._still_active(res) for res in alloc["reservations"])
+        ]
+
+        to_gc = []
+        for blazar_net in reservable_networks:
+            if blazar_net["id"] in currently_reserved:
+                # Do not clean up networks for active reservations
+                continue
+            neutron_net = next((
+                n for n in networks
+                if (n["provider:segmentation_id"] == blazar_net["segment_id"] and
+                    n["provider:physical_network"] == blazar_net["physical_network"])
+            ), None)
+            if neutron_net:
+                to_gc.append(neutron_net)
+
+        if not to_gc:
+            click.echo("No networks to clean up.")
+            return
+
+        for net in to_gc:
+            click.echo(tabulate([
+                ["Name", net["name"]],
+                ["Segment", f"{net['provider:physical_network']}:{net['provider:segmentation_id']}"],
+                ["Created", net["created_at"]],
+                ["Project", net["project_id"]],
+            ], tablefmt="fancy_grid"))
+            if click.confirm(f"Clean up network?"):
+                nuke_network(net["name"])
 
 
 class NetworkPublicIPStatusCommand(BaseCommand):

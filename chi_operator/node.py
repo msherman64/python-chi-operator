@@ -362,7 +362,7 @@ class NodeEnrollCommand(BaseCommand):
             patch = self._to_ironic_patch(node_params)
             self.log.debug(f'Ironic node patch for {node.uuid}: {patch}')
             ironic.node.update(node.uuid, patch)
-            self.log.info(f'Update Ironic node {node.uuid} ({node_name})')
+            self.log.info(f'Updated Ironic node {node.uuid} ({node_name})')
         except HTTPNotFound:
             node_params['name'] = node_name
             self.log.debug(f'Ironic node create: {node_params}')
