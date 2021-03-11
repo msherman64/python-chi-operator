@@ -7,7 +7,7 @@ from .base import BaseCommand
 from .util import column_align
 
 
-@click.group()
+@click.group(help="Subcommands related to user accounts")
 def user():
     pass
 

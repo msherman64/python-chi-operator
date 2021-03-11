@@ -15,7 +15,7 @@ from .base import BaseCommand
 IRONIC_CLIENT_VERSION = 1
 
 
-@click.group()
+@click.group(help="Subcommands related to bare metal nodes")
 def node():
     pass
 

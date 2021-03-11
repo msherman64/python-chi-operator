@@ -14,12 +14,12 @@ def log(msg):
     click.echo(msg, err=True)
 
 
-@click.group()
+@click.group(help="Subcommands related to reservations and leases")
 def lease():
     pass
 
 
-@lease.group()
+@lease.group(help="Manage resources associated with leases")
 def resource():
     pass
 

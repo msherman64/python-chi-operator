@@ -14,7 +14,7 @@ def log(msg):
     click.echo(msg, err=True)
 
 
-@click.group()
+@click.group(help="Subcommands related to networks, subnets, and routers")
 def network():
     pass
 
@@ -95,7 +95,7 @@ class NetworkDeleteCommand(BaseCommand):
         return getter(network_id=network_id).get(name)
 
 
-@network.group()
+@network.group(help="Subcommands around network segments / VLAN management")
 def segment():
     pass
 
