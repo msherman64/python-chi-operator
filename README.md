@@ -4,7 +4,7 @@ Want an operator CLI toolkit for Chameleon sites? This is it.
 
 ## Installation
 
-![https://pypi.org/project/python-chi-operator/](https://img.shields.io/pypi/v/python-chi=operator)
+![https://pypi.org/project/python-chi-operator/](https://img.shields.io/pypi/v/python-chi-operator)
 
 ```shell
 pip install python-chi-operator
