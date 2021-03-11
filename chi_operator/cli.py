@@ -2,6 +2,7 @@ import logging
 
 import click
 
+from .lease import lease
 from .network import network
 from .node import node
 from .user import user
@@ -16,6 +17,7 @@ def cli(ctx, verbose):
     logging.basicConfig(level=log_level)
 
 
+cli.add_command(lease)
 cli.add_command(network)
 cli.add_command(node)
 cli.add_command(user)
