@@ -1,17 +1,43 @@
+from datetime import datetime, timedelta
+from itertools import chain
 import ipaddress
+import re
+from typing import TYPE_CHECKING
 
-from chi.network import nuke_network
+import chi.network
 import click
 from click_spinner import spinner
 from dateutil.parser import parse
+from dateutil.tz import tzutc
 from tabulate import tabulate
 
 from .base import BaseCommand
 from .util import now
 
+if TYPE_CHECKING:
+    from neutronclient.v2_0.client import Client as NeutronClient
+
+DO_NOT_DELETE = "chi:do-not-delete"
+
 
 def log(msg):
     click.echo(msg, err=True)
+
+
+# https://stackoverflow.com/a/4628148
+regex = re.compile(r'((?P<days>\d+?)d)?((?P<hours>\d+?)hr)?((?P<minutes>\d+?)m)?((?P<seconds>\d+?)s)?')
+
+
+def parse_duration(duration_str):
+    parts = regex.match(duration_str)
+    if not parts:
+        return
+    parts = parts.groupdict()
+    time_params = {}
+    for name, param in parts.items():
+        if param:
+            time_params[name] = int(param)
+    return timedelta(**time_params)
 
 
 @click.group(help="Subcommands related to networks, subnets, and routers")
@@ -188,17 +214,23 @@ class NetworkSegmentGarbageCollectCommand(BaseCommand):
         for net in to_gc:
             click.echo(tabulate([
                 ["Name", net["name"]],
+                ["ID", net["id"]],
                 ["Segment", f"{net['provider:physical_network']}:{net['provider:segmentation_id']}"],
                 ["Created", net["created_at"]],
                 ["Project", net["project_id"]],
             ], tablefmt="fancy_grid"))
             if click.confirm(f"Clean up network?"):
-                nuke_network(net["name"])
+                with spinner():
+                    chi.network.nuke_network(net["id"])
 
+
+@network.group(help="Subcommands around IP management")
+def ip():
+    pass
 
 class NetworkPublicIPStatusCommand(BaseCommand):
     @staticmethod
-    @network.command(name='ips')
+    @ip.command(name='list')
     def cli():
         """Check the status of public IP addresses.
 
@@ -300,3 +332,118 @@ class NetworkPublicIPStatusCommand(BaseCommand):
                 ])
 
         click.echo(tabulate(rows, headers=headers))
+
+
+class NetworkPublicIPGarbageCollectCommand(BaseCommand):
+    @staticmethod
+    @ip.command(name='gc')
+    @click.option('--before', 'before', default='365d',
+                  help='date/time threshold to consider for IP inactivity')
+    def cli(before=None):
+        """Clean up unused public IP addresses.
+
+        Public IP addresses are assigned automatically to router gateway
+        interfaces if the router should have NAT to the internet. They are
+        additionally available as Floating IPs.
+
+        Router interfaces
+        -----------------
+
+        Garbage collection for router interfaces will happen for routers that:
+          - have "activity" older than the BEFORE threshold, meaning no
+            changes to the router or attached ports/subnets, AND
+          - have no active instances attached, AND
+          - do not have a "chi:do-not-delete" tag
+
+        Routers that are marked for GC will be deleted after removing all
+        existing interface ports.
+
+        Floating IPs
+        ------------
+
+        TODO: GC of Floating IPs currently not implemented.
+
+        """
+        before_delta = parse_duration(before)
+        return NetworkPublicIPGarbageCollectCommand().run(before_delta=before_delta)
+
+    def _delete_router(self, router, router_ports):
+        router_id = router["id"]
+
+        for port in router_ports:
+            for fixed_ip in port["fixed_ips"]:
+                chi.network.remove_subnet_from_router(
+                    router_id, fixed_ip["subnet_id"])
+                click.echo(f"Removed port {fixed_ip} from {router_id}")
+
+        chi.network.delete_router(router_id)
+        click.echo(f"Deleted router {router_id}")
+
+    def _should_collect_router(self, router: dict, router_ports: list,
+                               subnet_map: dict, before_delta=None):
+        subnet_ids = [
+            fxd_ip["subnet_id"]
+            for fxd_ip in chain(*[port["fixed_ips"] for port in router_ports])
+        ]
+        activity_times = [
+            parse(dt_str) for dt_str in [
+                router.get("created_at"),
+                router.get("updated_at"),
+                *chain(*[
+                    [p.get("created_at"), p.get("updated_at")]
+                    for p in router_ports
+                ]),
+                *chain(*[
+                    [subnet_map[s_id].get("created_at"), subnet_map[s_id].get("updated_at")]
+                    for s_id in subnet_ids
+                ]),
+            ]
+            if dt_str is not None
+        ]
+
+        has_do_not_delete_tag = DO_NOT_DELETE in router["tags"]
+        latest_activity = (
+            max(activity_times) if activity_times else datetime.min.replace(tzinfo=tzutc()))
+        any_instances = any(
+            subnet_map[s_id].get("has_instances", False) for s_id in subnet_ids)
+        should_collect = (
+            (not has_do_not_delete_tag) and
+            (not any_instances) and
+            (latest_activity < (datetime.now(tz=tzutc()) - before_delta))
+        )
+
+        if should_collect:
+            click.echo(click.style((
+                f"Will collect {router['id']} ({router['name']}) with last "
+                f"activity {latest_activity}"
+            ), fg="red"))
+        else:
+            click.echo(click.style(
+                f"Not collecting {router['id']} ({router['name']})", fg="cyan"))
+
+        return should_collect
+
+    def run(self, before_delta=None):
+        ports = chi.network.list_ports()
+        routers = [
+            r for r in chi.network.list_routers()
+            if bool(r["external_gateway_info"])
+        ]
+        subnet_map = {
+            s["id"]: s
+            for s in chi.network.list_subnets()
+        }
+        # Mark which subnets have instances
+        for p in ports:
+            if p["device_owner"] == "compute:nova":
+                for fxd_ip in p["fixed_ips"]:
+                    subnet_map[fxd_ip["subnet_id"]]["has_instances"] = True
+        for r in routers:
+            router_ports = [
+                p for p in ports
+                if p["device_owner"] == "network:router_interface" and p["device_id"] == r["id"]
+            ]
+            if (self._should_collect_router(
+                r, router_ports, subnet_map, before_delta=before_delta)
+                and click.confirm("Delete router?")):
+                self._delete_router(r, router_ports)
