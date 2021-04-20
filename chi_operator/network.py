@@ -346,9 +346,11 @@ class NetworkPublicIPGarbageCollectCommand(BaseCommand):
         interfaces if the router should have NAT to the internet. They are
         additionally available as Floating IPs.
 
+        \b
         Router interfaces
         -----------------
 
+        \b
         Garbage collection for router interfaces will happen for routers that:
           - have "activity" older than the BEFORE threshold, meaning no
             changes to the router or attached ports/subnets, AND
@@ -358,6 +360,7 @@ class NetworkPublicIPGarbageCollectCommand(BaseCommand):
         Routers that are marked for GC will be deleted after removing all
         existing interface ports.
 
+        \b
         Floating IPs
         ------------
 
