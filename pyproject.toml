@@ -1,0 +1,45 @@
+[tool.poetry]
+name = "python-chi-operator"
+version = "0.4.1"
+description = "Operator library for Chameleon"
+authors = ["University of Chicago <contact@chameleoncloud.org>"]
+readme = "README.md"
+homepage = "https://www.chameleoncloud.org"
+repository = "https://github.com/chameleonCloud/python-chi-operator"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: OpenStack",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+]
+
+packages = [{ include = "chi_operator" }]
+
+[tool.poetry.dependencies]
+python = "^3.6.2"
+python-chi = "^0.10.1"
+click = "^8.0.1"
+click-spinner = "^0.1.10"
+crudini = "^0.9.3"
+python-dateutil = "^2.8.1"
+python-dracclient = "^6.0.0"
+PyYAML = "^5.4.1"
+tabulate = "^0.8.9"
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.2.4"
+pytest-watch = "^4.2.0"
+flake8 = "^3.9.2"
+pydocstyle = "^6.1.1"
+black = "^21.5b1"
+tox-poetry-installer = {extras = ["poetry"], version = "^0.8.0"}
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+chameleon = "chi_operator.cli:cli"
